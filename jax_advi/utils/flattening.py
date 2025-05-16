@@ -9,37 +9,53 @@ def extract_info(array):
 
 
 def flatten_and_summarise(**input_arrays):
-
     input_arrays = OrderedDict(input_arrays)
+    summaries = OrderedDict()
+    indices = OrderedDict()
+    current = 0
+    flattened_parts = []
+    
+    for name, array in input_arrays.items():
+        flat_part = array.reshape(-1)
+        n_elements = flat_part.size
+        summaries[name] = extract_info(array) 
+        indices[name] = (current, current + n_elements)
+        flattened_parts.append(flat_part)
+        current += n_elements
+    
+    flattened = np.concatenate(flattened_parts)
+    return flattened, summaries, indices
 
-    summaries = OrderedDict({x: extract_info(y) for x, y in input_arrays.items()})
 
-    flattened = np.concatenate([y.reshape(-1) for y in input_arrays.values()])
+def apply_constraints_on_flat(flat_array, constraint_dict, summaries, indices):
+    new_flat = flat_array.copy()
+    log_det = 0.0
+    
+    for var_name, constrain_fun in constraint_dict.items():
+        if var_name not in indices:
+            continue  # Handle missing constraints if necessary
+        start, end = indices[var_name]
+        shape = summaries[var_name]
+        
+        # Extract, reshape, apply constraint
+        var_slice = new_flat[start:end]
+        var_array = var_slice.reshape(shape)
+        constrained_array, cur_log_det = constrain_fun(var_array)
+        
+        # Update flat array and log determinant
+        new_flat[start:end] = constrained_array.reshape(-1)
+        log_det += cur_log_det
+    
+    return new_flat, log_det
 
-    return flattened, summaries
 
-
-def reconstruct(flat_array, summaries, reshape_fun):
-
-    # Base case
-    if len(summaries) == 0:
-
-        return {}
-
-    cur_name, cur_summary = list(summaries.items())[0]
-
-    # Cast to int is there to have this definitely work with TF
-    cur_elements = int(np.prod(cur_summary))
-
-    cur_result = {cur_name: reshape_fun(flat_array[:cur_elements], cur_summary)}
-
-    remaining_summaries = OrderedDict(
-        {x: y for x, y in summaries.items() if x != cur_name}
-    )
-
-    return {
-        **cur_result,
-        **reconstruct(
-            flat_array[cur_elements:], remaining_summaries, reshape_fun=reshape_fun
-        ),
-    }
+def reconstruct(flat_array, summaries,fn_reshape):
+    params = OrderedDict()
+    current = 0
+    
+    for name, shape in summaries.items():
+        n_elements = np.prod(shape).astype(int)
+        params[name] = fn_reshape(flat_array[current:current + n_elements],shape)
+        current += n_elements
+    
+    return params

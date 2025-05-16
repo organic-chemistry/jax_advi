@@ -17,9 +17,65 @@ To use this library, you'll need [JAX](https://github.com/google/jax). If you wa
 
 To install, clone this repository and run `python setup.py develop`.
 
+##### Guide Types
+
+JAX ADVI supports several types of variational guides to approximate the posterior distribution. The primary ones you'll interact with are:
+
+*   **`MAPGuide`**: Performs Maximum A Posteriori (MAP) estimation. This finds the mode of the posterior distribution, which can be a good point estimate or a starting point for more complex variational inference.
+*   **`MeanFieldGuide`**: Assumes a factorized (mean-field) Gaussian approximation to the posterior. This is a common and often effective choice for ADVI.
+*   **`LowRankGuide`**: Extends the `MeanFieldGuide` by adding a low-rank correction to the covariance matrix, allowing for some correlations between parameters.
+*   **`FullRankGuide`**: Assumes a full-rank Gaussian approximation, capturing all correlations between parameters. This is the most flexible but also the most computationally intensive.
+
+With these guides, you can:
+
+*   Perform MAP estimation.
+*   Draw samples from the (approximate) posterior distribution.
+*   Obtain the mean and standard deviation of the approximate posterior.
+
+**Initializing `MeanFieldGuide` from `MAPGuide`**
+
+It can be beneficial to first find the MAP estimate and then use it to initialize the parameters of a `MeanFieldGuide`. Here's how you can do this using the logistic regression example:
+
+First, perform MAP estimation:
+```python
+from jax_advi.advi import optimize_advi, ADVI_params # Assuming ADVI_params is here
+from jax_advi.guide import MAPGuide, MeanFieldGuide
+# ... (rest of the logistic regression setup: theta_shapes, calculate_likelihood, calculate_prior, log_lik_fun, log_prior_fun)
+
+# Initial MAP fit
+map_guide = MAPGuide()
+map_result = optimize_advi(
+    theta_shapes,
+    log_prior_fun,
+    log_lik_fun,
+    guide=map_guide,
+    # optimizer_kwargs, num_steps etc. might be needed depending on optimize_advi signature
+)
+
+# Extract MAP estimates to initialize MeanFieldGuide
+# The exact way to get `init_mean_scale` depends on the structure of `map_result`
+# Assuming map_result['params'] holds the flat optimized parameters
+init_mean_scale = map_result['params'] 
+# init_log_sd_scale can be a small negative number for initial uncertainty
+init_log_sd_scale = -1.0 
+
+# Then, fit with MeanFieldGuide
+mean_field_guide = MeanFieldGuide()
+mean_field_guide.init_mean_scale = init_mean_scale
+mean_field_guide.init_log_sd_scale = init_log_sd_scale
+
+result = optimize_advi(
+    theta_shapes, 
+    log_prior_fun, 
+    log_lik_fun, 
+    guide=mean_field_guide # Pass the initialized guide
+    # n_draws=None # or your desired number of draws
+)
+```
+
 ##### Usage
 
-The key function is `optimize_advi_mean_field`. Here's a simple example of a logistic regression:
+The key function is `optimize_advi`. Here's a simple example of a logistic regression:
 
 Model:
 
@@ -27,7 +83,7 @@ Model:
 
 Code:
 ```python
-from jax_advi.advi import optimize_advi_mean_field
+from jax_advi.advi import optimize_advi
 from jax import jit
 from jax.scipy.stats import norm
 from functools import partial
@@ -143,4 +199,3 @@ The fit took 10s on my laptop with a GTX 2070, compared to 100 minutes in Stan, 
 
 ![stan_advi](images/tennis_comparison_stan_advi.png)
 I hope you find this library useful. Please raise issues if anything doesn't work. Please note that this is still a new package and I wouldn't trusting it blindly yet. Its mean estimates seem reliable so far, but I recommend checking them against Stan's (or another MCMC framework) to be sure. If you find examples that break it, I'd be very interested to see them.
-

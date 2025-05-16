@@ -1,6 +1,6 @@
 import numpy as np
 from functools import wraps
-
+import jax
 
 def convert_decorator(fun, verbose=True):
     # A decorator that makes sure we return float64 dtypes, and optionally
@@ -8,7 +8,7 @@ def convert_decorator(fun, verbose=True):
     def result(x):
 
         value, grad = fun(x)
-
+        #raise
         if verbose:
             print(value, np.linalg.norm(grad))
 
@@ -18,7 +18,23 @@ def convert_decorator(fun, verbose=True):
         )
 
     return result
+"""
+def convert_decorator(fun, verbose=True):
+    # Ensure JAX-compatible operations (no NumPy)
+    @jax.jit
+    def jax_wrapped(x):
+        value, grad = fun(x)
+        return value, grad
 
+    def result(x):
+        value, grad = jax_wrapped(x)
+        if verbose:
+            jax.debug.print("Value: {value}, Grad Norm: {grad_norm}", 
+                            value=value, grad_norm=jax.numpy.linalg.norm(grad))
+        return value, grad  # Return JAX arrays directly
+
+    return result
+"""
 
 def print_decorator(fun, verbose=True):
     def result(x):

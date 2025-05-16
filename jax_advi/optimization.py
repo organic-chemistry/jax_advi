@@ -1,17 +1,22 @@
 from .utils.autodiff import hvp
 from scipy.optimize import minimize
 from jax import jit, value_and_grad
+import jax
 from .utils.misc import convert_decorator, print_decorator, count_decorator
 from functools import partial
+import numpy as np
 
 
-def optimize_with_jac(to_minimize, start_params, method_name="L-BFGS-B", verbose=False):
+def optimize_with_jac(to_minimize, start_params, method_name="L-BFGS-B", verbose=False,minimize_kwargs={}):
 
     with_grad = partial(convert_decorator, verbose=verbose)(
         jit(value_and_grad(to_minimize))
     )
+    val = jit(to_minimize)
+    gradi = lambda x: np.array(jax.grad(to_minimize)(x))
 
-    result = minimize(with_grad, start_params, method=method_name, jac=True)
+    result = minimize(with_grad, start_params, method=method_name, jac=True,**minimize_kwargs)
+    #result = minimize(val, start_params, method=method_name, jac=gradi,**minimize_kwargs)
 
     return result
 
