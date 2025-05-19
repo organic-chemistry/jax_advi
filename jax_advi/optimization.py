@@ -9,11 +9,11 @@ import numpy as np
 
 def optimize_with_jac(to_minimize, start_params, method_name="L-BFGS-B", verbose=False,minimize_kwargs={}):
 
+    #fun = partial(to_minimize,verbose=verbose)
     with_grad = partial(convert_decorator, verbose=verbose)(
         jit(value_and_grad(to_minimize))
     )
-    val = jit(to_minimize)
-    gradi = lambda x: np.array(jax.grad(to_minimize)(x))
+
 
     result = minimize(with_grad, start_params, method=method_name, jac=True,**minimize_kwargs)
     #result = minimize(val, start_params, method=method_name, jac=gradi,**minimize_kwargs)

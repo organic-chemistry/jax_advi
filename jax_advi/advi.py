@@ -14,6 +14,7 @@ from typing import Protocol, NamedTuple
 import jax
 
 #@jax.jit()
+#@partial(jax.jit, static_argnames=('verbose','constrain_fun_dict'))
 def _calculate_log_posterior(
     flat_theta, log_lik_fun, log_prior_fun, constrain_fun_dict, summary,verbose=False
 ):
@@ -37,7 +38,7 @@ def _calculate_log_posterior(
 
 
 
-
+#@partial(jax.jit, static_argnames=('verbose','constrain_fun_dict','log_lik_fun', 'log_prior_fun',"guide"))
 def _build_objective_fun(theta_shape_dict, constrain_fun_dict, log_lik_fun, 
                         log_prior_fun, seed, M, guide: VariationalGuide,verbose=False):
     
@@ -63,6 +64,7 @@ def _build_objective_fun(theta_shape_dict, constrain_fun_dict, log_lik_fun,
     
     return flat_theta, summary, to_minimize,var_params
 
+#@partial(jax.jit, static_argnames=('verbose','constrain_fun_dict'))
 def _calculate_objective(var_params_flat, summary, constrain_fun_dict, 
                         log_lik_fun, log_prior_fun, zs, guide: VariationalGuide,verbose):
     
