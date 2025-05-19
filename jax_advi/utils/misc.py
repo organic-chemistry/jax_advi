@@ -1,7 +1,9 @@
 import numpy as np
 from functools import wraps
 import jax
+from functools import partial
 
+@partial(jax.jit, static_argnames=('verbose',))
 def convert_decorator(fun, verbose=True):
     # A decorator that makes sure we return float64 dtypes, and optionally
     # prints the evaluation of the function.
@@ -35,7 +37,7 @@ def convert_decorator(fun, verbose=True):
 
     return result
 """
-
+@partial(jax.jit, static_argnames=('verbose',))
 def print_decorator(fun, verbose=True):
     def result(x):
 
