@@ -13,6 +13,7 @@ def optimize_with_jac(to_minimize, start_params, method_name="L-BFGS-B", verbose
     with_grad = partial(convert_decorator, verbose=verbose)(
         jit(value_and_grad(to_minimize))
     )
+    with_grad = jit(value_and_grad(to_minimize))
 
 
     result = minimize(with_grad, start_params, method=method_name, jac=True,**minimize_kwargs)
