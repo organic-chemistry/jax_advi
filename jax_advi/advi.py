@@ -12,9 +12,9 @@ from .optimization import optimize_with_jac, optimize_with_hvp
 from jax_advi.guide import VariationalGuide,MeanFieldGuide
 from typing import Protocol, NamedTuple
 import jax
-
+from collections import namedtuple
 #@jax.jit()
-#@partial(jax.jit, static_argnames=('verbose','constrain_fun_dict'))
+#@partial(jax.jit, static_argnames=('verbose'))
 def _calculate_log_posterior(
     flat_theta, log_lik_fun, log_prior_fun, constrain_fun_dict, summary,verbose=False
 ):
@@ -38,7 +38,7 @@ def _calculate_log_posterior(
 
 
 
-#@partial(jax.jit, static_argnames=('verbose','constrain_fun_dict','log_lik_fun', 'log_prior_fun',"guide"))
+#@partial(jax.jit, static_argnames=('verbose','log_lik_fun', 'log_prior_fun',"guide","constrain_fun_dict","theta_shape_dict","M"))
 def _build_objective_fun(theta_shape_dict, constrain_fun_dict, log_lik_fun, 
                         log_prior_fun, seed, M, guide: VariationalGuide,verbose=False):
     
@@ -64,7 +64,7 @@ def _build_objective_fun(theta_shape_dict, constrain_fun_dict, log_lik_fun,
     
     return flat_theta, summary, to_minimize,var_params
 
-#@partial(jax.jit, static_argnames=('verbose','constrain_fun_dict'))
+#@partial(jax.jit, static_argnames=('verbose'))
 def _calculate_objective(var_params_flat, summary, constrain_fun_dict, 
                         log_lik_fun, log_prior_fun, zs, guide: VariationalGuide,verbose):
     
@@ -105,6 +105,19 @@ def optimize_advi(
     minimize_kwargs = {}
 ) -> Dict[str, Any]:
     
+
+    #convert to namptuple in order to try to jit the next functions
+    #theta_shape_named = namedtuple('theta_shape', theta_shape_dict.keys())
+    #theta_shape = theta_shape_named(*theta_shape_dict.values())
+    #constrain_fun_named = namedtuple('constrain_fun', constrain_fun_dict.keys())
+    #constrain_fun = constrain_fun_named(*constrain_fun_dict.values())
+
+    #print(theta_shape_named.__name__)
+    #aise
+
+    #globals()[theta_shape_named.__name__] = theta_shape_named
+    #globals()[constrain_fun_named.__name__] = constrain_fun_named
+
     # Build objective function
     flat_theta, summary, to_minimize, var_params = _build_objective_fun(
         theta_shape_dict, constrain_fun_dict, log_lik_fun, log_prior_fun, 

@@ -2,7 +2,7 @@ import numpy as np
 from functools import wraps
 import jax
 from functools import partial
-
+import jax.numpy as jnp
 #@partial(jax.jit, static_argnames=('verbose',))
 def convert_decorator(fun, verbose=True):
     # A decorator that makes sure we return float64 dtypes, and optionally
@@ -13,6 +13,21 @@ def convert_decorator(fun, verbose=True):
         #raise
         if verbose:
             print(value, np.linalg.norm(grad))
+
+        return (
+            np.array(value).astype(np.float64),
+            np.array(grad).astype(np.float64),
+        )
+
+    return result
+
+def convert_decorator2(fun, verbose=True):
+    # A decorator that makes sure we return float64 dtypes, and optionally
+    # prints the evaluation of the function.
+    def result(x):
+        #x_jax = jnp.array(x, dtype=jnp.float32)   
+        value, grad = fun(x)
+        #raise
 
         return (
             np.array(value).astype(np.float64),

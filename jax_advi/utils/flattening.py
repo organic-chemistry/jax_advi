@@ -1,4 +1,5 @@
 import numpy as np
+import jax.numpy as jnp
 from functools import partial
 from collections import namedtuple, OrderedDict
 
@@ -23,7 +24,7 @@ def flatten_and_summarise(**input_arrays):
         flattened_parts.append(flat_part)
         current += n_elements
     
-    flattened = np.concatenate(flattened_parts)
+    flattened = jnp.concatenate(flattened_parts)
     return flattened, summaries, indices
 
 
