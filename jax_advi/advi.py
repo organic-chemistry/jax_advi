@@ -150,6 +150,8 @@ def optimize_advi(
         delta_elbo = guide.inv_norm(log_sigma)
         elbo += delta_elbo
 
+        print(free_params,log_sigma)
+
 
 
 
