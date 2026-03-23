@@ -8,49 +8,41 @@ from functools import partial
 from scipy.optimize import minimize
 from typing import Tuple, Dict, Callable, Any,List
 from .optimization import optimize_with_jac, optimize_with_hvp
-
-from jax_advi.guide import VariationalGuide,MeanFieldGuide
+from .guide import CompositeGuide
+from jax_advi.guide import VariationalGuide,MeanFieldGuide,LaplaceApproxGuide
 from typing import Protocol, NamedTuple
 import jax
 from collections import namedtuple
 #@jax.jit()
 #@partial(jax.jit, static_argnames=('verbose'))
-def _calculate_log_posterior(
-    flat_theta, log_lik_fun, log_prior_fun, constrain_fun_dict, summary,verbose=False
-):
-
-    cur_theta = reconstruct(flat_theta, summary, jnp.reshape)
-    #if verbose:
-    #    print(cur_theta)
-
-    # Compute the log determinant of the constraints
-    cur_theta, cur_log_det = apply_constraints(cur_theta, constrain_fun_dict)
-    if verbose:
-        print(cur_theta)
-    cur_likelihood = log_lik_fun(cur_theta)
-    cur_prior = log_prior_fun(cur_theta)
-    if verbose:
-        print("like",cur_likelihood)
-        print("prior",cur_prior)
-        print("logdet",cur_log_det)
-
-    return cur_likelihood + cur_prior + cur_log_det
 
 
 
 #@partial(jax.jit, static_argnames=('verbose','log_lik_fun', 'log_prior_fun',"guide","constrain_fun_dict","theta_shape_dict","M"))
-def _build_objective_fun(theta_shape_dict, constrain_fun_dict, log_lik_fun, 
-                        log_prior_fun, seed, M, guide: VariationalGuide,verbose=False):
-    
-    theta = {k: jnp.empty(v) for k, v in theta_shape_dict.items()}
-    flat_theta, summary,indices = flatten_and_summarise(**theta)
-    var_params = guide.init_params(flat_theta)
+def _build_objective_fun(theta_shape_dict, constrain_fun_dict, log_lik_fun,
+                         log_prior_fun, seed, M, guide: VariationalGuide, verbose=False):
 
-    
-    # Generate noise draws
-    zs = jax.random.normal(jax.random.PRNGKey(seed), (M, guide.z_dim()))
-    
-    # Create objective
+    theta = {k: jnp.empty(v) for k, v in theta_shape_dict.items()}
+    flat_theta, summary, indices = flatten_and_summarise(**theta)
+
+
+    # CompositeGuide needs summary before init_params
+    if isinstance(guide, CompositeGuide):
+        guide.summary = summary
+        if not guide.param_mapping:
+            assert set(guide.group_guides.keys()) == set(theta_shape_dict.keys()), (
+                f"CompositeGuide keys {set(guide.group_guides.keys())} "
+                f"must match theta_shape_dict keys {set(theta_shape_dict.keys())}"
+            )
+        else:
+            assert set(guide.param_mapping.keys()) == set(theta_shape_dict.keys()), (
+                f"CompositeGuide param_mapping keys {set(guide.param_mapping.keys())} "
+                f"must match theta_shape_dict keys {set(theta_shape_dict.keys())}"
+            )
+
+    var_params = guide.init_params(flat_theta)
+    zs = guide.sample_z(jax.random.PRNGKey(seed), M)
+
     to_minimize = partial(
         _calculate_objective,
         summary=summary,
@@ -59,36 +51,43 @@ def _build_objective_fun(theta_shape_dict, constrain_fun_dict, log_lik_fun,
         log_prior_fun=log_prior_fun,
         zs=zs,
         guide=guide,
-        verbose=verbose
+        verbose=verbose,
     )
-    
-    return flat_theta, summary, to_minimize,var_params
 
-#@partial(jax.jit, static_argnames=('verbose'))
-def _calculate_objective(var_params_flat, summary, constrain_fun_dict, 
-                        log_lik_fun, log_prior_fun, zs, guide: VariationalGuide,verbose):
-    
+    return flat_theta, summary, to_minimize, var_params
+
+
+def _calculate_objective(var_params_flat, summary, constrain_fun_dict,
+                         log_lik_fun, log_prior_fun, zs, guide: VariationalGuide, verbose):
+
     cur_entropy = guide.entropy(var_params_flat)
-    
-    def calculate_log_posterior(z):
-        flat_theta = guide.transform_draws(z, var_params_flat)
-        return _calculate_log_posterior(
-            flat_theta, log_lik_fun, log_prior_fun, constrain_fun_dict, summary
-        )
-    def calculate_log_posteriorv(z):
-        flat_theta = guide.transform_draws(z, var_params_flat)
-        return _calculate_log_posterior(
-            flat_theta, log_lik_fun, log_prior_fun, constrain_fun_dict, summary,verbose=True
-        )
-    if verbose:
-        print("Post",jnp.mean(jax.vmap(calculate_log_posterior)(zs)))
-        print("Entropy",cur_entropy)
-        print(jax.vmap(calculate_log_posterior)(zs))
-        print(jax.vmap(calculate_log_posteriorv)(zs))
-        print(jax.vmap(calculate_log_posteriorv)(jnp.zeros_like(zs)))
 
-        print(zs)
+    def calculate_log_posterior(z):
+        # Get theta_dict either from composite or flat path
+        if isinstance(guide, CompositeGuide):
+            theta_dict = guide.transform_draws_to_dict(z, var_params_flat)
+        else:
+            flat_theta = guide.transform_draws(z, var_params_flat)
+            theta_dict = reconstruct(flat_theta, summary, jnp.reshape)
+
+        # Apply constraints
+        theta_dict, log_det = apply_constraints(theta_dict, constrain_fun_dict)
+
+        # Apply reparametrisation if present
+        if guide.post_transform is not None:
+            log_det = log_det + guide.post_transform.log_det(theta_dict)
+            theta_dict = guide.post_transform.forward(theta_dict)
+
+        if verbose:
+            print("theta", theta_dict)
+            print("like", log_lik_fun(theta_dict))
+            print("prior", log_prior_fun(theta_dict))
+            print("logdet", log_det)
+
+        return log_lik_fun(theta_dict) + log_prior_fun(theta_dict) + log_det
+
     return -jnp.mean(jax.vmap(calculate_log_posterior)(zs)) - cur_entropy
+
 
 # ======================== Modified ADVI Core ========================
 def optimize_advi(
@@ -140,24 +139,42 @@ def optimize_advi(
     elbo = -result.fun
     free_params = result.x
 
-    if guide.name == "LaplaceApproxGuide":
-        d=np.diag(np.abs(hessian))
-        log_sigma = -np.log(d)/2
-        free_params = np.concatenate([free_params,log_sigma])
-        guide = MeanFieldGuide()
-        guide.init_params(flat_theta)
-        guide.name = "LaplaceApproxGuide"
-        delta_elbo = guide.inv_norm(log_sigma)
-        elbo += delta_elbo
+    if isinstance(guide, CompositeGuide):
+        new_group_guides = {}
+        new_free_params = []
+        delta_elbo = 0.0
 
-        print(free_params,log_sigma)
+        for name, sub_guide in guide.group_guides.items():
+            vp_s, vp_e = guide._var_param_slices[name]
+            sub_params = result.x[vp_s:vp_e]
+
+            if isinstance(sub_guide, LaplaceApproxGuide):
+                sub_hessian = hessian[vp_s:vp_e, vp_s:vp_e]
+                new_sub_guide, new_sub_params, d_elbo = sub_guide.to_meanfield(sub_params, sub_hessian)
+                new_group_guides[name] = new_sub_guide
+                new_free_params.append(new_sub_params)
+                delta_elbo += d_elbo
+            else:
+                new_group_guides[name] = sub_guide
+                new_free_params.append(sub_params)
+
+        if delta_elbo != 0.0:
+            free_params = np.concatenate(new_free_params)
+            elbo += delta_elbo
+            guide.group_guides = new_group_guides
+            guide.init_params(flat_theta)  # recompute slices
+
+    elif isinstance(guide, LaplaceApproxGuide):
+        guide, free_params, delta_elbo = guide.to_meanfield(free_params, hessian)
+        elbo += delta_elbo
 
 
 
 
     #To be able to drow from the guide:
     guide.final_var_params_flat = free_params
-    guide.summary = summary
+    if not isinstance(guide, CompositeGuide):
+        guide.summary = summary
     guide.constrain_fun_dict = constrain_fun_dict
     #print(to_minimize(result.x))
 
