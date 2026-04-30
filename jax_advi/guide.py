@@ -119,7 +119,8 @@ class LaplaceApproxGuide(MAPGuide):
 
     def to_meanfield(self, free_params: jax.Array, hessian: jax.Array):# -> Tuple[MeanFieldGuide, jax.Array, float]:
         """Convert MAP solution to MeanField using Laplace approximation."""
-        d = np.diag(np.abs(hessian))
+        d =np.abs(hessian)
+
         log_sigma = -np.log(d) / 2
         new_free_params = np.concatenate([free_params, log_sigma])
         

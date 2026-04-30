@@ -88,8 +88,50 @@ def _calculate_objective(var_params_flat, summary, constrain_fun_dict,
 
     return -jnp.mean(jax.vmap(calculate_log_posterior)(zs)) - cur_entropy
 
+def diag_hessian(f, x):
+    """
+    Diagonal of the Hessian in O(P) memory using vmap over jvp.
+    Cost: P forward-over-reverse passes instead of P^2.
+    """
+    grad_f = jax.grad(f)
+    basis  = jnp.eye(len(x))
+    hvp    = lambda v: jax.jvp(grad_f, (x,), (v,))[1]
+    return jax.vmap(hvp)(basis).diagonal()
 
+def _diag_hessian_chunked(grad_f, x, chunk_size=64):
+    """
+    Compute diagonal of Hessian in chunks.
+    Memory: O(P * chunk_size) instead of O(P^2).
+    chunk_size=1  -> O(P) memory, slowest
+    chunk_size=P  -> O(P^2) memory, fastest (= original full Hessian diag)
+    Tune chunk_size to fit in your memory budget.
+    """
+    P = len(x)
+    n_chunks = (P + chunk_size - 1) // chunk_size
+    diag = jnp.zeros(P)
+    
+    for chunk_idx in range(n_chunks):
+        i_start = chunk_idx * chunk_size
+        i_end   = min(i_start + chunk_size, P)
+        chunk_sz = i_end - i_start
+        
+        # Basis vectors for this chunk only: (chunk_sz, P)
+        basis_chunk = jax.vmap(
+            lambda i: jnp.zeros(P).at[i].set(1.0)
+        )(jnp.arange(i_start, i_end))
+        
+        # HVP for each basis vector in chunk: (chunk_sz, P)
+        hvps = jax.vmap(
+            lambda v: jax.jvp(grad_f, (x,), (v,))[1]
+        )(basis_chunk)
+        
+        # Extract only diagonal elements H[i,i] for i in this chunk
+        chunk_diag = hvps[jnp.arange(chunk_sz), jnp.arange(i_start, i_end)]
+        diag = diag.at[i_start:i_end].set(chunk_diag)
+    
+    return diag
 # ======================== Modified ADVI Core ========================
+import time
 def optimize_advi(
     theta_shape_dict: Dict[str, Tuple],
     log_prior_fun: Callable[[Dict[str, jax.Array]], float],
@@ -133,11 +175,29 @@ def optimize_advi(
     else:
         result = optimize_with_hvp(to_minimize, var_params.reshape(-1), opt_method, verbose,minimize_kwargs=minimize_kwargs)[0]
 
+    t0= time.time()
+    print("Mini done D")
 
     grads = jax.grad(to_minimize)(result.x)
-    hessian = jax.hessian(to_minimize)(result.x)
     elbo = -result.fun
     free_params = result.x
+
+    needs_hessian = (
+        isinstance(guide, LaplaceApproxGuide) or
+        (isinstance(guide, CompositeGuide) and
+        any(isinstance(g, LaplaceApproxGuide) for g in guide.group_guides.values()))
+    )
+
+    if needs_hessian:
+        #hess_diag = diag_hessian(to_minimize, result.x)  # (P,) only
+        hess_diag = _diag_hessian_chunked(jax.grad(to_minimize), result.x, chunk_size=128)
+      
+        
+    else:
+        hess_diag = None
+    print("H done",time.time()-t0)
+    t0= time.time()
+
 
     if isinstance(guide, CompositeGuide):
         new_group_guides = {}
@@ -149,7 +209,7 @@ def optimize_advi(
             sub_params = result.x[vp_s:vp_e]
 
             if isinstance(sub_guide, LaplaceApproxGuide):
-                sub_hessian = hessian[vp_s:vp_e, vp_s:vp_e]
+                sub_hessian = hess_diag[vp_s:vp_e]
                 new_sub_guide, new_sub_params, d_elbo = sub_guide.to_meanfield(sub_params, sub_hessian)
                 new_group_guides[name] = new_sub_guide
                 new_free_params.append(new_sub_params)
@@ -165,7 +225,7 @@ def optimize_advi(
             guide.init_params(flat_theta)  # recompute slices
 
     elif isinstance(guide, LaplaceApproxGuide):
-        guide, free_params, delta_elbo = guide.to_meanfield(free_params, hessian)
+        guide, free_params, delta_elbo = guide.to_meanfield(free_params, hess_diag)
         elbo += delta_elbo
 
 
@@ -178,6 +238,11 @@ def optimize_advi(
     guide.constrain_fun_dict = constrain_fun_dict
     #print(to_minimize(result.x))
 
+    print("Draws",time.time()-t0)
+    t0= time.time()
+
+    d = guide.posterior_draw_and_transform(n_draws)
+    print("end d",time.time()-t0)
 
 
     return  {
@@ -185,9 +250,9 @@ def optimize_advi(
         "elbo" : elbo,
         "opt_result": result,
         "grads": grads,
-        "hessian" : hessian,
+        "hessian" : hess_diag,
         "guide":guide,
-        "draws": guide.posterior_draw_and_transform(n_draws)
+        "draws": d
     }
 
 
